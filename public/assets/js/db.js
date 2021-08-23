@@ -1,48 +1,82 @@
-export function checkForIndexedDb() {
-  if (!window.indexedDB) {
-    console.log("Your browser doesn't support a stable version of IndexedDB.");
-    return false;
+let db;
+let budgetVersion;
+
+const request = indexedDB.open('BudgetDB', budgetVersion || 1);
+
+request.onupgradeneeded = function (e) {
+  console.log('Upgrade needed in IndexDB');
+
+  const { oldVersion } = e;
+  const newVersion = e.newVersion || db.version;
+
+  console.log(`DB Updated from version ${oldVersion} to ${newVersion}`);
+
+  db = e.target.result;
+
+  if (db.objectStoreNames.length === 0) {
+    db.createObjectStore('BudgetStore', { autoIncrement: true });
   }
-  return true;
+};
+
+request.onerror = function (e) {
+  console.log(`Woops! ${e.target.errorCode}`);
+};
+
+function checkDatabase() {
+  console.log('check db invoked');
+
+  let transaction = db.transaction(['BudgetStore'], 'readwrite');
+
+  const store = transaction.objectStore('BudgetStore');
+
+  const getAll = store.getAll();
+
+  getAll.onsuccess = function () {
+    
+    if (getAll.result.length > 0) {
+      fetch('/api/transaction/bulk', {
+        method: 'POST',
+        body: JSON.stringify(getAll.result),
+        headers: {
+          Accept: 'application/json, text/plain, */*',
+          'Content-Type': 'application/json',
+        },
+      })
+        .then((response) => response.json())
+        .then((res) => {
+          
+          if (res.length !== 0) {
+            
+            transaction = db.transaction(['BudgetStore'], 'readwrite');
+
+            const currentStore = transaction.objectStore('BudgetStore');
+
+            currentStore.clear();
+            console.log('Clearing store 🧹');
+          }
+        });
+    }
+  };
 }
 
-export function useIndexedDb(databaseName, storeName, method, object) {
-  return new Promise((resolve, reject) => {
-    const request = window.indexedDB.open(databaseName, 1);
-    let db,
-      tx,
-      store;
+request.onsuccess = function (e) {
+  
+  db = e.target.result;
 
-    request.onupgradeneeded = function(e) {
-      const db = request.result;
-      db.createObjectStore(storeName, { keyPath: "_id" });
-    };
+  if (navigator.onLine) {
+    
+    checkDatabase();
+  }
+};
 
-    request.onerror = function(e) {
-      console.log("There was an error");
-    };
+const saveRecord = (record) => {
+  
+ 
+  const transaction = db.transaction(['BudgetStore'], 'readwrite');
 
-    request.onsuccess = function(e) {
-      db = request.result;
-      tx = db.transaction(storeName, "readwrite");
-      store = tx.objectStore(storeName);
+  const store = transaction.objectStore('BudgetStore');
 
-      db.onerror = function(e) {
-        console.log("error");
-      };
-      if (method === "put") {
-        store.put(object);
-      } else if (method === "get") {
-        const all = store.getAll();
-        all.onsuccess = function() {
-          resolve(all.result);
-        };
-      } else if (method === "delete") {
-        store.delete(object._id);
-      }
-      tx.oncomplete = function() {
-        db.close();
-      };
-    };
-  });
-}
+  store.add(record);
+};
+
+window.addEventListener('online', checkDatabase);
